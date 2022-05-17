@@ -1,1 +1,1 @@
-image_base64
+file
