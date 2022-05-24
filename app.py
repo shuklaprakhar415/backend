@@ -4,7 +4,8 @@ from msilib.schema import Directory
 from turtle import title
 from flask import Flask, jsonify, request
 from flask_sqlalchemy import SQLAlchemy
-import datetime
+from datetime import datetime
+# import datetime
 from flask_marshmallow import Marshmallow
 from sqlalchemy import null
 import base64
@@ -19,9 +20,11 @@ import numpy as np
 import face_recognition
 from PIL import Image
 from imageio import imread
+from flask_cors import CORS
+import json
 
 app = Flask(__name__)
-
+CORS(app)
 app.secret_key = "prakharshukla"
 UPLOAD_FOLDER = 'static/ImgUploads'
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
@@ -46,7 +49,9 @@ class Students(db.Model):
     student_name = db.Column(db.String(50))
     image_uploded = db.Column(db.Boolean, default=False)
     present_status = db.Column(db.Boolean, default=False)
-    date = db.Column(db.DateTime, default=datetime.datetime.now)
+    
+    date = db.Column(db.String(20), default="00:00")
+    
 
     def __init__(self, admission_No, student_name):
         self.admission_No = admission_No
@@ -70,8 +75,6 @@ def get_student_list():
     return jsonify(results)
 
 # ---Adding Student Name and Admission No list Route---
-
-
 @app.route('/add_student', methods=['POST'])
 def add_student():
     admission_No = request.json['admission_No']
@@ -80,6 +83,7 @@ def add_student():
     db.session.add(students)
     db.session.commit()
     return student_schema.jsonify(students)
+
 
 # ---Adding Student Image while adding image to list Route---
 
@@ -102,6 +106,7 @@ def add_student_image(admission_No):
         filename = f'{admission_No}{file_extension}'
         file.save(os.path.join(app.config['UPLOAD_FOLDER'], filename))
         student.image_uploded = True
+        db.session.commit()
         resp = jsonify({'message': 'File successfully uploaded'})
         resp.status_code = 201
         return resp
@@ -116,8 +121,9 @@ def add_student_image(admission_No):
 @app.route('/mark_attendance/<admission_No>/', methods=['POST'])
 def mark_attendance(admission_No):
     student = Students.query.filter_by(admission_No=admission_No).first()
-    file = request.files['file']
-    filename = file.filename
+    
+    base64_string = request.json['base64_string']
+    
     path = 'static/ImgUploads'
     images = []
     classNames = []
@@ -137,20 +143,19 @@ def mark_attendance(admission_No):
 
     encodeListKnown = findEncodings(images)
 
-    file.save(os.path.join('static/', filename))
-    newpath = f'static/{filename}'
-    with open(newpath, "rb") as fid:
-        data = fid.read()
-    os.remove(os.path.join('static/', filename))
-    b64_bytes = base64.b64encode(data)
-    b64_string = b64_bytes.decode()
-    img = imread(io.BytesIO(base64.b64decode(b64_string)))
+    def data_uri_to_cv2_img(uri):
+        encoded_data = uri.split(',')[1]
+        nparr = np.fromstring(base64.b64decode(encoded_data), np.uint8)
+        img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        return img
+
+    img =data_uri_to_cv2_img(base64_string)
     imgS = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
     facesCurFrame = face_recognition.face_locations(imgS)
     encodesCurFrame = face_recognition.face_encodings(imgS, facesCurFrame)
 
     for encodeFace, faceLoc in zip(encodesCurFrame, facesCurFrame):
-        matches = face_recognition.compare_faces(encodeListKnown, encodeFace)
+        matches = face_recognition.compare_faces(encodeListKnown, encodeFace , tolerance=0.6)
         faceDis = face_recognition.face_distance(encodeListKnown, encodeFace)
         matchIndex = np.argmin(faceDis)
 
@@ -158,7 +163,11 @@ def mark_attendance(admission_No):
             name = classNames[matchIndex].upper()
             if name == admission_No:
                 student.present_status = True
+                now = datetime.now()
+                dt_string = now.strftime("%d/%m/%Y %H:%M:%S")
+                student.date = dt_string
                 db.session.commit()
+
                 return jsonify({'mesaage': 'Face Found'})
 
             else:
